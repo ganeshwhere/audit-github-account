@@ -32,6 +32,10 @@ struct DashboardTemplate {
     ignore_archived: bool,
 }
 
+#[derive(Template)]
+#[template(path = "index.html")]
+struct LandingTemplate;
+
 #[derive(Debug, Clone, Serialize)]
 struct DashboardRow {
     repo: String,
@@ -49,11 +53,13 @@ struct OAuthTokenExchangeRequest<'a> {
     state: &'a str,
 }
 
-pub async fn index(jar: PrivateCookieJar) -> impl IntoResponse {
+pub async fn index(jar: PrivateCookieJar) -> Result<impl IntoResponse, AppError> {
     match auth::read_session(&jar) {
-        Ok(Some(_)) => Redirect::to("/dashboard").into_response(),
-        Ok(None) => Html("<h1>GitHub Collaborator Dashboard</h1><p><a href=\"/auth/login\">Log in with GitHub</a></p>").into_response(),
-        Err(_) => Html("<h1>GitHub Collaborator Dashboard</h1><p><a href=\"/auth/login\">Log in with GitHub</a></p>").into_response(),
+        Ok(Some(_)) => Ok(Redirect::to("/dashboard").into_response()),
+        Ok(None) | Err(_) => {
+            let template = LandingTemplate;
+            Ok(Html(template.render()?).into_response())
+        }
     }
 }
 
