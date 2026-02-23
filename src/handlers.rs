@@ -26,6 +26,9 @@ use crate::{
 #[template(path = "dashboard.html")]
 struct DashboardTemplate {
     rows: Vec<DashboardRow>,
+    csrf_token: String,
+    ignore_forks: bool,
+    ignore_archived: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -168,6 +171,9 @@ pub async fn dashboard(
     Extension(session): Extension<SessionData>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Html<String>, AppError> {
+    let ignore_forks = query.ignore_forks;
+    let ignore_archived = query.ignore_archived;
+
     let data = state
         .github
         .fetch_repos_with_collaborators(
@@ -195,7 +201,12 @@ pub async fn dashboard(
         })
         .collect::<Vec<_>>();
 
-    let template = DashboardTemplate { rows };
+    let template = DashboardTemplate {
+        rows,
+        csrf_token: session.csrf_token,
+        ignore_forks,
+        ignore_archived,
+    };
     let rendered = template.render()?;
     Ok(Html(rendered))
 }

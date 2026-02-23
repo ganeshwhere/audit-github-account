@@ -3,27 +3,359 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Collaborator Dashboard</title>
+    <title>Collaborator Audit Dashboard</title>
+    <meta name="csrf-token" content="{{ csrf_token }}" />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f8fc;
+        --surface: #ffffff;
+        --text: #1f2a44;
+        --muted: #5f6b84;
+        --line: #dde3ef;
+        --brand: #1456cc;
+        --danger: #b92b2b;
+        --good: #1f8f4e;
+      }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top right, #e4ecff 0, transparent 35%), var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 18px;
+        box-shadow: 0 8px 20px rgba(20, 38, 74, 0.06);
+      }
+      h1 {
+        margin: 0 0 14px;
+      }
+      .controls,
+      .filters {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-bottom: 12px;
+      }
+      input[type="search"],
+      select {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 14px;
+      }
+      .btn {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: white;
+        cursor: pointer;
+      }
+      .btn-primary {
+        background: var(--brand);
+        border-color: var(--brand);
+        color: white;
+      }
+      .btn-danger {
+        background: var(--danger);
+        border-color: var(--danger);
+        color: white;
+      }
+      .btn[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th,
+      td {
+        padding: 10px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: middle;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      #status {
+        margin: 12px 0;
+      }
+      #status.good {
+        color: var(--good);
+      }
+      #status.bad {
+        color: var(--danger);
+      }
+      .modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.35);
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      .modal.show {
+        display: flex;
+      }
+      .modal-card {
+        width: min(520px, 92vw);
+        background: white;
+        border-radius: 12px;
+        padding: 16px;
+        border: 1px solid var(--line);
+      }
+      @media (max-width: 760px) {
+        th:nth-child(3),
+        td:nth-child(3) {
+          display: none;
+        }
+      }
+    </style>
   </head>
   <body>
-    <h1>Collaborator Dashboard</h1>
-    <table>
-      <thead>
-        <tr>
-          <th>Repository</th>
-          <th>Collaborator</th>
-          <th>Permission</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in rows %}
-        <tr>
-          <td>{{ row.repo }}</td>
-          <td>{{ row.collaborator }}</td>
-          <td>{{ row.permission }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <main class="wrap">
+      <section class="panel">
+        <h1>Collaborator Audit Dashboard</h1>
+        <div class="controls">
+          <form method="get" action="/dashboard" class="filters">
+            <label><input type="checkbox" name="ignore_forks" value="true" {% if ignore_forks %}checked{% endif %} /> Ignore forks</label>
+            <label><input type="checkbox" name="ignore_archived" value="true" {% if ignore_archived %}checked{% endif %} /> Ignore archived</label>
+            <button class="btn" type="submit">Apply repository filters</button>
+          </form>
+          <button class="btn" id="logout-btn" type="button">Log out</button>
+        </div>
+
+        <div class="filters">
+          <input id="search" type="search" placeholder="Search repository or username" />
+          <select id="permission-filter">
+            <option value="">All permissions</option>
+            <option value="admin">admin</option>
+            <option value="maintain">maintain</option>
+            <option value="write">write</option>
+            <option value="triage">triage</option>
+            <option value="read">read</option>
+          </select>
+          <button class="btn btn-danger" id="remove-btn" disabled type="button">Remove selected</button>
+          <span class="muted" id="selection-count">0 selected</span>
+        </div>
+
+        <div id="status" class="muted"></div>
+
+        <table id="rows-table">
+          <thead>
+            <tr>
+              <th><input id="select-all" type="checkbox" /></th>
+              <th>Repository</th>
+              <th>Collaborator</th>
+              <th>Permission</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            <tr
+              data-repo="{{ row.repo }}"
+              data-user="{{ row.collaborator }}"
+              data-permission="{{ row.permission }}"
+            >
+              <td>
+                <input
+                  class="row-check"
+                  type="checkbox"
+                  value="{{ row.repo }}::{{ row.collaborator }}"
+                  data-repo="{{ row.repo }}"
+                  data-user="{{ row.collaborator }}"
+                  {% if !row.can_remove %}disabled{% endif %}
+                />
+              </td>
+              <td>{{ row.repo }}</td>
+              <td>{{ row.collaborator }}</td>
+              <td>
+                {{ row.permission }}
+                {% if !row.can_remove %}<span class="muted">(removal disabled)</span>{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </main>
+
+    <div id="confirm-modal" class="modal" aria-hidden="true">
+      <div class="modal-card">
+        <h2>Confirm collaborator removal</h2>
+        <p id="confirm-text" class="muted"></p>
+        <div class="filters">
+          <button class="btn" id="cancel-remove" type="button">Cancel</button>
+          <button class="btn btn-danger" id="confirm-remove" type="button">Confirm removal</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+      const searchInput = document.getElementById("search");
+      const permissionFilter = document.getElementById("permission-filter");
+      const selectAll = document.getElementById("select-all");
+      const removeBtn = document.getElementById("remove-btn");
+      const statusBox = document.getElementById("status");
+      const selectionCount = document.getElementById("selection-count");
+      const modal = document.getElementById("confirm-modal");
+      const confirmText = document.getElementById("confirm-text");
+      const confirmRemove = document.getElementById("confirm-remove");
+      const cancelRemove = document.getElementById("cancel-remove");
+      const logoutBtn = document.getElementById("logout-btn");
+
+      function rowChecks() {
+        return Array.from(document.querySelectorAll(".row-check"));
+      }
+
+      function visibleRows() {
+        return Array.from(document.querySelectorAll("#rows-table tbody tr")).filter((row) => row.style.display !== "none");
+      }
+
+      function applyFilters() {
+        const term = searchInput.value.trim().toLowerCase();
+        const permission = permissionFilter.value;
+
+        Array.from(document.querySelectorAll("#rows-table tbody tr")).forEach((row) => {
+          const repo = row.dataset.repo.toLowerCase();
+          const user = row.dataset.user.toLowerCase();
+          const rowPermission = row.dataset.permission;
+
+          const textMatch = !term || repo.includes(term) || user.includes(term);
+          const permissionMatch = !permission || permission === rowPermission;
+          row.style.display = textMatch && permissionMatch ? "" : "none";
+        });
+
+        syncSelectAllState();
+      }
+
+      function selectedItems() {
+        return rowChecks()
+          .filter((check) => check.checked && !check.disabled)
+          .map((check) => ({ repo: check.dataset.repo, username: check.dataset.user }));
+      }
+
+      function updateSelectionUI() {
+        const count = selectedItems().length;
+        selectionCount.textContent = `${count} selected`;
+        removeBtn.disabled = count === 0;
+      }
+
+      function syncSelectAllState() {
+        const checks = visibleRows()
+          .map((row) => row.querySelector(".row-check"))
+          .filter((check) => check && !check.disabled);
+
+        if (checks.length === 0) {
+          selectAll.checked = false;
+          selectAll.indeterminate = false;
+          updateSelectionUI();
+          return;
+        }
+
+        const selected = checks.filter((check) => check.checked).length;
+        selectAll.checked = selected === checks.length;
+        selectAll.indeterminate = selected > 0 && selected < checks.length;
+        updateSelectionUI();
+      }
+
+      searchInput.addEventListener("input", applyFilters);
+      permissionFilter.addEventListener("change", applyFilters);
+
+      rowChecks().forEach((check) => {
+        check.addEventListener("change", syncSelectAllState);
+      });
+
+      selectAll.addEventListener("change", () => {
+        visibleRows().forEach((row) => {
+          const check = row.querySelector(".row-check");
+          if (check && !check.disabled) {
+            check.checked = selectAll.checked;
+          }
+        });
+        syncSelectAllState();
+      });
+
+      removeBtn.addEventListener("click", () => {
+        const items = selectedItems();
+        if (items.length === 0) return;
+        confirmText.textContent = `You are removing ${items.length} collaborator assignment(s). This action cannot be undone.`;
+        modal.classList.add("show");
+      });
+
+      cancelRemove.addEventListener("click", () => modal.classList.remove("show"));
+
+      confirmRemove.addEventListener("click", async () => {
+        const items = selectedItems();
+        if (items.length === 0) {
+          modal.classList.remove("show");
+          return;
+        }
+
+        confirmRemove.disabled = true;
+        statusBox.className = "muted";
+        statusBox.textContent = "Removing collaborators...";
+
+        try {
+          const response = await fetch("/remove", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": csrfToken
+            },
+            body: JSON.stringify({ items })
+          });
+
+          const payload = await response.json();
+          const successCount = Array.isArray(payload.success) ? payload.success.length : 0;
+          const failureCount = Array.isArray(payload.failed) ? payload.failed.length : 0;
+
+          if (!response.ok) {
+            throw new Error(payload.error || "Removal request failed");
+          }
+
+          statusBox.className = failureCount > 0 ? "bad" : "good";
+          statusBox.textContent = `Removed ${successCount}. Failed ${failureCount}.`;
+
+          if (successCount > 0) {
+            payload.success.forEach((item) => {
+              const selector = `tr[data-repo='${item.repo}'][data-user='${item.username}']`;
+              const row = document.querySelector(selector);
+              if (row) row.remove();
+            });
+          }
+
+          syncSelectAllState();
+        } catch (error) {
+          statusBox.className = "bad";
+          statusBox.textContent = error.message || "Removal request failed";
+        } finally {
+          confirmRemove.disabled = false;
+          modal.classList.remove("show");
+        }
+      });
+
+      logoutBtn.addEventListener("click", async () => {
+        await fetch("/logout", {
+          method: "POST",
+          headers: { "X-CSRF-Token": csrfToken }
+        });
+        window.location.href = "/";
+      });
+
+      applyFilters();
+      updateSelectionUI();
+    </script>
   </body>
 </html>
