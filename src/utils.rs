@@ -1,5 +1,6 @@
 use std::env;
 
+use rand::{Rng, distributions::Alphanumeric, rngs::ThreadRng};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 use url::Url;
 
@@ -41,4 +42,13 @@ pub fn init_tracing() {
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(fmt::layer())
         .init();
+}
+
+pub fn random_token(len: usize) -> String {
+    let mut rng: ThreadRng = rand::thread_rng();
+    (&mut rng)
+        .sample_iter(&Alphanumeric)
+        .take(len)
+        .map(char::from)
+        .collect()
 }
