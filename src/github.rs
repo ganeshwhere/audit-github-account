@@ -65,9 +65,7 @@ impl GitHubClient {
 
         while let Some(url) = next_url {
             let response = self
-                .send_with_retry(|| {
-                    self.authorized_request(self.http.get(url.clone()), token)
-                })
+                .send_with_retry(|| self.authorized_request(self.http.get(url.clone()), token))
                 .await?;
 
             if !response.status().is_success() {
@@ -112,9 +110,7 @@ impl GitHubClient {
 
         while let Some(url) = next_url {
             let response = self
-                .send_with_retry(|| {
-                    self.authorized_request(self.http.get(url.clone()), token)
-                })
+                .send_with_retry(|| self.authorized_request(self.http.get(url.clone()), token))
                 .await?;
 
             if response.status() == StatusCode::FORBIDDEN {
@@ -187,16 +183,34 @@ impl GitHubClient {
                     .filter(|c| c.login != viewer_login)
                     .collect::<Vec<_>>();
 
-                drop(permit);
-
                 if filtered.is_empty() {
+                    drop(permit);
                     return Ok(None);
                 }
+
+                let can_remove = match client
+                    .fetch_effective_permission(&token, &owner, &repo_name, &viewer_login)
+                    .await
+                {
+                    Ok(Some(permission)) => is_admin_permission(&permission),
+                    Ok(None) => false,
+                    Err(err) => {
+                        warn!(
+                            owner,
+                            repo = repo_name,
+                            error = %err,
+                            "permission check failed, disabling removal"
+                        );
+                        false
+                    }
+                };
+
+                drop(permit);
 
                 Ok(Some(RepoWithCollaborators {
                     repo,
                     collaborators: filtered,
-                    can_remove: false,
+                    can_remove,
                 }))
             }
         }))
@@ -244,6 +258,31 @@ impl GitHubClient {
         Ok(Some(response.json::<CollaboratorPermission>().await?))
     }
 
+    pub async fn repo_exists_for_owner(
+        &self,
+        token: &str,
+        owner: &str,
+        repo: &str,
+    ) -> Result<bool, AppError> {
+        let endpoint = format!("https://api.github.com/repos/{owner}/{repo}");
+        let response = self
+            .send_with_retry(|| self.authorized_request(self.http.get(endpoint.clone()), token))
+            .await?;
+
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+
+        if !response.status().is_success() {
+            return Err(AppError::Upstream(format!(
+                "repository ownership check failed for {owner}/{repo}: {}",
+                response.status()
+            )));
+        }
+
+        Ok(true)
+    }
+
     pub async fn remove_collaborator(
         &self,
         token: &str,
@@ -289,4 +328,12 @@ impl GitHubClient {
             "request failed repeatedly due to rate limiting".to_string(),
         ))
     }
+}
+
+fn is_admin_permission(permission: &CollaboratorPermission) -> bool {
+    permission.permission.eq_ignore_ascii_case("admin")
+        || permission
+            .role_name
+            .as_ref()
+            .is_some_and(|value| value.eq_ignore_ascii_case("admin"))
 }

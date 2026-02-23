@@ -1,18 +1,24 @@
+use std::collections::{HashMap, HashSet};
+
 use askama::Template;
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Extension, Query, State},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect},
 };
 use axum_extra::extract::PrivateCookieJar;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use url::Url;
 
 use crate::{
     AppState, auth,
     error::AppError,
-    models::{DashboardQuery, GitHubAccessTokenResponse, OAuthCallbackQuery, SessionData},
+    models::{
+        DashboardQuery, GitHubAccessTokenResponse, OAuthCallbackQuery, RemoveFailure, RemoveRequest,
+        RemoveResponse, RemoveSuccess, SessionData,
+    },
     utils,
 };
 
@@ -27,6 +33,7 @@ struct DashboardRow {
     repo: String,
     collaborator: String,
     permission: String,
+    can_remove: bool,
 }
 
 #[derive(Debug, Deserialize, serde::Serialize)]
@@ -158,10 +165,9 @@ pub async fn auth_callback(
 
 pub async fn dashboard(
     State(state): State<AppState>,
-    jar: PrivateCookieJar,
+    Extension(session): Extension<SessionData>,
     Query(query): Query<DashboardQuery>,
 ) -> Result<Html<String>, AppError> {
-    let session = auth::read_session(&jar)?.ok_or(AppError::Auth)?;
     let data = state
         .github
         .fetch_repos_with_collaborators(
@@ -176,12 +182,14 @@ pub async fn dashboard(
         .into_iter()
         .flat_map(|repo_row| {
             let repo_name = repo_row.repo.name;
+            let can_remove = repo_row.can_remove;
             repo_row.collaborators.into_iter().map(move |c| {
                 let permission = c.permission_label().to_string();
                 DashboardRow {
                     repo: repo_name.clone(),
                     collaborator: c.login,
                     permission,
+                    can_remove,
                 }
             })
         })
@@ -201,6 +209,154 @@ pub async fn logout(
     Ok((jar, Redirect::to("/")))
 }
 
-pub async fn remove_placeholder() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"success": [], "failed": []}))
+pub async fn remove_collaborators(
+    State(state): State<AppState>,
+    Extension(session): Extension<SessionData>,
+    Json(payload): Json<RemoveRequest>,
+) -> Result<(StatusCode, Json<RemoveResponse>), AppError> {
+    if payload.items.is_empty() {
+        return Err(AppError::BadRequest("items must not be empty".to_string()));
+    }
+
+    let mut success = Vec::new();
+    let mut failed = Vec::new();
+
+    let mut repos_seen = HashSet::new();
+    for item in &payload.items {
+        if item.repo.trim().is_empty() || item.username.trim().is_empty() {
+            failed.push(RemoveFailure {
+                repo: item.repo.clone(),
+                username: item.username.clone(),
+                reason: "repo and username must be non-empty".to_string(),
+            });
+            continue;
+        }
+        repos_seen.insert(item.repo.clone());
+    }
+
+    let mut ownership_cache: HashMap<String, bool> = HashMap::new();
+    let mut admin_cache: HashMap<String, bool> = HashMap::new();
+
+    for repo in repos_seen {
+        let owned = match state
+            .github
+            .repo_exists_for_owner(&session.access_token, &session.user_login, &repo)
+            .await
+        {
+            Ok(value) => value,
+            Err(err) => {
+                warn!(repo, error = %err, "ownership validation failed");
+                false
+            }
+        };
+        ownership_cache.insert(repo.clone(), owned);
+
+        let is_admin = if owned {
+            match state
+                .github
+                .fetch_effective_permission(
+                    &session.access_token,
+                    &session.user_login,
+                    &repo,
+                    &session.user_login,
+                )
+                .await
+            {
+                Ok(Some(permission)) => permission.permission.eq_ignore_ascii_case("admin"),
+                Ok(None) => false,
+                Err(err) => {
+                    warn!(repo, error = %err, "admin check failed");
+                    false
+                }
+            }
+        } else {
+            false
+        };
+
+        admin_cache.insert(repo, is_admin);
+    }
+
+    for item in payload.items {
+        if item.username == session.user_login {
+            failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: "cannot remove authenticated user".to_string(),
+            });
+            continue;
+        }
+
+        if !ownership_cache.get(&item.repo).copied().unwrap_or(false) {
+            failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: "repository is not owned by authenticated user".to_string(),
+            });
+            continue;
+        }
+
+        if !admin_cache.get(&item.repo).copied().unwrap_or(false) {
+            failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: "authenticated user does not have admin permission".to_string(),
+            });
+            continue;
+        }
+
+        info!(repo = item.repo, username = item.username, "attempting collaborator deletion");
+        let status = match state
+            .github
+            .remove_collaborator(
+                &session.access_token,
+                &session.user_login,
+                &item.repo,
+                &item.username,
+            )
+            .await
+        {
+            Ok(status) => status,
+            Err(err) => {
+                warn!(repo = item.repo, username = item.username, error = %err, "collaborator deletion request failed");
+                failed.push(RemoveFailure {
+                    repo: item.repo,
+                    username: item.username,
+                    reason: "upstream request failed".to_string(),
+                });
+                continue;
+            }
+        };
+
+        match status {
+            StatusCode::NO_CONTENT => success.push(RemoveSuccess {
+                repo: item.repo,
+                username: item.username,
+            }),
+            StatusCode::FORBIDDEN => failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: "insufficient permissions".to_string(),
+            }),
+            StatusCode::UNPROCESSABLE_ENTITY => failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: "validation failed or abuse detection triggered".to_string(),
+            }),
+            StatusCode::NOT_FOUND => failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: "collaborator not found".to_string(),
+            }),
+            other => failed.push(RemoveFailure {
+                repo: item.repo,
+                username: item.username,
+                reason: format!("unexpected response status: {other}"),
+            }),
+        }
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(RemoveResponse { success, failed }),
+    ))
 }

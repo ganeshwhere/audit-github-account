@@ -56,7 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let protected = Router::new()
         .route("/dashboard", get(handlers::dashboard))
         .route("/logout", post(handlers::logout))
-        .route("/remove", post(handlers::remove_placeholder))
+        .route("/remove", post(handlers::remove_collaborators))
         .layer(from_fn_with_state(state.clone(), middleware::csrf_protect))
         .layer(from_fn_with_state(state.clone(), middleware::require_auth));
 
