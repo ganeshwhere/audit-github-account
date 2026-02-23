@@ -1,7 +1,13 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use futures::{StreamExt, stream};
-use reqwest::{Client, RequestBuilder, Response, StatusCode};
+use reqwest::{
+    Client, RequestBuilder, Response, StatusCode,
+    header::{HeaderMap, RETRY_AFTER},
+};
 use tokio::{sync::Semaphore, time::sleep};
 use tracing::{info, warn};
 
@@ -192,7 +198,7 @@ impl GitHubClient {
                     .fetch_effective_permission(&token, &owner, &repo_name, &viewer_login)
                     .await
                 {
-                    Ok(Some(permission)) => is_admin_permission(&permission),
+                    Ok(Some(permission)) => Self::is_admin_permission(&permission),
                     Ok(None) => false,
                     Err(err) => {
                         warn!(
@@ -303,6 +309,14 @@ impl GitHubClient {
         Ok(response.status())
     }
 
+    pub fn is_admin_permission(permission: &CollaboratorPermission) -> bool {
+        permission.permission.eq_ignore_ascii_case("admin")
+            || permission
+                .role_name
+                .as_ref()
+                .is_some_and(|value| value.eq_ignore_ascii_case("admin"))
+    }
+
     fn authorized_request(&self, request: RequestBuilder, token: &str) -> RequestBuilder {
         request
             .header("Accept", "application/vnd.github+json")
@@ -319,25 +333,75 @@ impl GitHubClient {
         for attempt in 1..=max_attempts {
             let response = build().send().await?;
 
-            if response.status() != StatusCode::TOO_MANY_REQUESTS {
+            if let Some(backoff) = Self::rate_limit_backoff(response.status(), response.headers()) {
+                let backoff_ms = backoff.as_millis() as u64;
+                warn!(attempt, backoff_ms, "rate limit hit, backing off");
+                sleep(backoff).await;
+                continue;
+            }
+
+            if response.status() != StatusCode::TOO_MANY_REQUESTS
+                && response.status() != StatusCode::FORBIDDEN
+            {
                 return Ok(response);
             }
 
-            let backoff_ms = 250u64.saturating_mul(2u64.saturating_pow(u32::from(attempt - 1)));
-            warn!(attempt, backoff_ms, "rate limit hit, backing off");
-            sleep(Duration::from_millis(backoff_ms)).await;
+            return Ok(response);
         }
 
         Err(AppError::Upstream(
             "request failed repeatedly due to rate limiting".to_string(),
         ))
     }
-}
 
-fn is_admin_permission(permission: &CollaboratorPermission) -> bool {
-    permission.permission.eq_ignore_ascii_case("admin")
-        || permission
-            .role_name
-            .as_ref()
-            .is_some_and(|value| value.eq_ignore_ascii_case("admin"))
+    fn rate_limit_backoff(status: StatusCode, headers: &HeaderMap) -> Option<Duration> {
+        if status != StatusCode::TOO_MANY_REQUESTS
+            && !(status == StatusCode::FORBIDDEN && Self::is_rate_limited(headers))
+        {
+            return None;
+        }
+
+        if let Some(delay) = Self::retry_after_delay(headers) {
+            return Some(delay);
+        }
+
+        if let Some(delay) = Self::reset_time_delay(headers) {
+            return Some(delay);
+        }
+
+        // GitHub recommends waiting at least one minute when secondary rate limiting
+        // occurs without explicit timing headers.
+        Some(Duration::from_secs(60))
+    }
+
+    fn is_rate_limited(headers: &HeaderMap) -> bool {
+        headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v == "0")
+            || headers.contains_key(RETRY_AFTER)
+    }
+
+    fn retry_after_delay(headers: &HeaderMap) -> Option<Duration> {
+        let retry_after = headers
+            .get(RETRY_AFTER)?
+            .to_str()
+            .ok()?
+            .parse::<u64>()
+            .ok()?;
+        Some(Duration::from_secs(retry_after.max(1)))
+    }
+
+    fn reset_time_delay(headers: &HeaderMap) -> Option<Duration> {
+        let reset_at = headers
+            .get("x-ratelimit-reset")?
+            .to_str()
+            .ok()?
+            .parse::<u64>()
+            .ok()?;
+
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+        let wait = if reset_at > now { reset_at - now } else { 1 };
+        Some(Duration::from_secs(wait))
+    }
 }

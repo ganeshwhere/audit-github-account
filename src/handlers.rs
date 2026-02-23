@@ -15,6 +15,7 @@ use url::Url;
 use crate::{
     AppState, auth,
     error::AppError,
+    github::GitHubClient,
     models::{
         DashboardQuery, GitHubAccessTokenResponse, OAuthCallbackQuery, RemoveFailure,
         RemoveRequest, RemoveResponse, RemoveSuccess, SessionData,
@@ -103,10 +104,24 @@ pub async fn auth_callback(
         return Err(AppError::Auth);
     };
 
-    if expected_state != query.state {
+    if query.state.as_deref() != Some(expected_state.as_str()) {
         error!("oauth state mismatch");
         return Err(AppError::Auth);
     }
+
+    if let Some(error_code) = query.error {
+        let detail = query
+            .error_description
+            .unwrap_or_else(|| "oauth authorization failed".to_string());
+        warn!(error_code, detail, "oauth callback returned error");
+        return Err(AppError::BadRequest(format!(
+            "GitHub OAuth failed: {error_code}. {detail}"
+        )));
+    }
+
+    let code = query
+        .code
+        .ok_or_else(|| AppError::BadRequest("oauth callback missing code".to_string()))?;
 
     let redirect_uri = state
         .config
@@ -117,9 +132,9 @@ pub async fn auth_callback(
     let token_payload = OAuthTokenExchangeRequest {
         client_id: &state.config.github_client_id,
         client_secret: &state.config.github_client_secret,
-        code: &query.code,
+        code: &code,
         redirect_uri: redirect_uri.as_str(),
-        state: &query.state,
+        state: &expected_state,
     };
 
     let token_response = state
@@ -138,23 +153,37 @@ pub async fn auth_callback(
 
     let token = token_response.json::<GitHubAccessTokenResponse>().await?;
 
-    if !token.token_type.eq_ignore_ascii_case("bearer") {
+    if let Some(error_code) = token.error {
+        let detail = token
+            .error_description
+            .unwrap_or_else(|| "token exchange failed".to_string());
+        warn!(
+            error_code,
+            detail, "github oauth token exchange returned error"
+        );
+        return Err(AppError::BadRequest(format!(
+            "GitHub token exchange failed: {error_code}. {detail}"
+        )));
+    }
+
+    let access_token = token.access_token.ok_or_else(|| AppError::Auth)?;
+    let token_type = token.token_type.unwrap_or_default();
+    let scopes = token.scope.unwrap_or_default();
+
+    if !token_type.eq_ignore_ascii_case("bearer") {
         return Err(AppError::Auth);
     }
 
-    if !auth::has_required_scopes(&token.scope) {
+    if !auth::has_required_scopes(&scopes) {
         return Err(AppError::BadRequest(
             "OAuth scopes are insufficient. Required scopes: repo, read:org".to_string(),
         ));
     }
 
-    let user = state
-        .github
-        .fetch_authenticated_user(&token.access_token)
-        .await?;
+    let user = state.github.fetch_authenticated_user(&access_token).await?;
 
     let session = SessionData {
-        access_token: token.access_token,
+        access_token,
         user_login: user.login,
         csrf_token: utils::random_token(32),
     };
@@ -273,7 +302,7 @@ pub async fn remove_collaborators(
                 )
                 .await
             {
-                Ok(Some(permission)) => permission.permission.eq_ignore_ascii_case("admin"),
+                Ok(Some(permission)) => GitHubClient::is_admin_permission(&permission),
                 Ok(None) => false,
                 Err(err) => {
                     warn!(repo, error = %err, "admin check failed");

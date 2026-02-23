@@ -70,8 +70,10 @@ pub struct RepoWithCollaborators {
 
 #[derive(Debug, Deserialize)]
 pub struct OAuthCallbackQuery {
-    pub code: String,
-    pub state: String,
+    pub code: Option<String>,
+    pub state: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -106,9 +108,11 @@ pub struct RemoveResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct GitHubAccessTokenResponse {
-    pub access_token: String,
-    pub scope: String,
-    pub token_type: String,
+    pub access_token: Option<String>,
+    pub scope: Option<String>,
+    pub token_type: Option<String>,
+    pub error: Option<String>,
+    pub error_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
