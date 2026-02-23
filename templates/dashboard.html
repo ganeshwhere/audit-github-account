@@ -3,9 +3,27 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Dashboard</title>
+    <title>Collaborator Dashboard</title>
   </head>
   <body>
-    <h1>Dashboard</h1>
+    <h1>Collaborator Dashboard</h1>
+    <table>
+      <thead>
+        <tr>
+          <th>Repository</th>
+          <th>Collaborator</th>
+          <th>Permission</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.repo }}</td>
+          <td>{{ row.collaborator }}</td>
+          <td>{{ row.permission }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </body>
 </html>

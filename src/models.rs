@@ -24,19 +24,41 @@ pub struct Repository {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Permissions {
+    #[serde(default)]
     pub admin: bool,
+    #[serde(default)]
     pub push: bool,
+    #[serde(default)]
     pub pull: bool,
-    pub maintain: Option<bool>,
-    pub triage: Option<bool>,
+    #[serde(default)]
+    pub maintain: bool,
+    #[serde(default)]
+    pub triage: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Collaborator {
     pub login: String,
     pub id: u64,
+    #[serde(default)]
     pub permissions: Permissions,
     pub role_name: Option<String>,
+}
+
+impl Collaborator {
+    pub fn permission_label(&self) -> &'static str {
+        if self.permissions.admin {
+            "admin"
+        } else if self.permissions.maintain {
+            "maintain"
+        } else if self.permissions.push {
+            "write"
+        } else if self.permissions.triage {
+            "triage"
+        } else {
+            "read"
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,14 +111,37 @@ pub struct GitHubAccessTokenResponse {
     pub token_type: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GitHubUser {
     pub login: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CollaboratorPermission {
     pub permission: String,
     pub role_name: Option<String>,
     pub user: GitHubUser,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DashboardQuery {
+    #[serde(default)]
+    pub ignore_forks: bool,
+    #[serde(default)]
+    pub ignore_archived: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct RepoFilterOptions {
+    pub ignore_forks: bool,
+    pub ignore_archived: bool,
+}
+
+impl From<DashboardQuery> for RepoFilterOptions {
+    fn from(value: DashboardQuery) -> Self {
+        Self {
+            ignore_forks: value.ignore_forks,
+            ignore_archived: value.ignore_archived,
+        }
+    }
 }

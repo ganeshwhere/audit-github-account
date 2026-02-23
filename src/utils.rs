@@ -52,3 +52,16 @@ pub fn random_token(len: usize) -> String {
         .map(char::from)
         .collect()
 }
+
+pub fn parse_next_link(link_header: Option<&str>) -> Option<String> {
+    let header = link_header?;
+    for item in header.split(',') {
+        let trimmed = item.trim();
+        if trimmed.contains("rel=\"next\"") {
+            let start = trimmed.find('<')?;
+            let end = trimmed.find('>')?;
+            return Some(trimmed[start + 1..end].to_owned());
+        }
+    }
+    None
+}

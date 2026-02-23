@@ -5,20 +5,29 @@ use axum::{
     response::{Html, IntoResponse, Redirect},
 };
 use axum_extra::extract::PrivateCookieJar;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 use url::Url;
 
 use crate::{
     AppState, auth,
     error::AppError,
-    models::{GitHubAccessTokenResponse, OAuthCallbackQuery, SessionData},
+    models::{DashboardQuery, GitHubAccessTokenResponse, OAuthCallbackQuery, SessionData},
     utils,
 };
 
 #[derive(Template)]
 #[template(path = "dashboard.html")]
-struct DashboardTemplate;
+struct DashboardTemplate {
+    rows: Vec<DashboardRow>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DashboardRow {
+    repo: String,
+    collaborator: String,
+    permission: String,
+}
 
 #[derive(Debug, Deserialize, serde::Serialize)]
 struct OAuthTokenExchangeRequest<'a> {
@@ -68,7 +77,7 @@ pub async fn auth_login(
             ("state", oauth_state.as_str()),
         ],
     )
-    .map_err(|e| AppError::Internal)?;
+    .map_err(|_e| AppError::Internal)?;
 
     info!("starting github oauth flow");
     Ok((jar, Redirect::to(authorization_url.as_str())))
@@ -147,8 +156,38 @@ pub async fn auth_callback(
     Ok((jar, Redirect::to("/dashboard")))
 }
 
-pub async fn dashboard() -> Result<Html<String>, AppError> {
-    let template = DashboardTemplate;
+pub async fn dashboard(
+    State(state): State<AppState>,
+    jar: PrivateCookieJar,
+    Query(query): Query<DashboardQuery>,
+) -> Result<Html<String>, AppError> {
+    let session = auth::read_session(&jar)?.ok_or(AppError::Auth)?;
+    let data = state
+        .github
+        .fetch_repos_with_collaborators(
+            &session.access_token,
+            &session.user_login,
+            query.into(),
+            state.config.max_concurrency,
+        )
+        .await?;
+
+    let rows = data
+        .into_iter()
+        .flat_map(|repo_row| {
+            let repo_name = repo_row.repo.name;
+            repo_row.collaborators.into_iter().map(move |c| {
+                let permission = c.permission_label().to_string();
+                DashboardRow {
+                    repo: repo_name.clone(),
+                    collaborator: c.login,
+                    permission,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let template = DashboardTemplate { rows };
     let rendered = template.render()?;
     Ok(Html(rendered))
 }
