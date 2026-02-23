@@ -10,6 +10,7 @@ use std::net::SocketAddr;
 
 use axum::{
     Router,
+    middleware::from_fn_with_state,
     routing::{get, post},
 };
 use axum_extra::extract::cookie::Key;
@@ -52,14 +53,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cookie_key,
     };
 
+    let protected = Router::new()
+        .route("/dashboard", get(handlers::dashboard))
+        .route("/logout", post(handlers::logout))
+        .route("/remove", post(handlers::remove_placeholder))
+        .layer(from_fn_with_state(state.clone(), middleware::csrf_protect))
+        .layer(from_fn_with_state(state.clone(), middleware::require_auth));
+
     let app = Router::new()
         .route("/", get(handlers::index))
         .route("/health", get(handlers::health))
         .route("/auth/login", get(handlers::auth_login))
         .route("/auth/callback", get(handlers::auth_callback))
-        .route("/dashboard", get(handlers::dashboard))
-        .route("/logout", post(handlers::logout))
-        .route("/remove", post(handlers::remove_placeholder))
+        .merge(protected)
         .with_state(state);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], 3000));
