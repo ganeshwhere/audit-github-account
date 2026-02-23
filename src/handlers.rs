@@ -16,8 +16,8 @@ use crate::{
     AppState, auth,
     error::AppError,
     models::{
-        DashboardQuery, GitHubAccessTokenResponse, OAuthCallbackQuery, RemoveFailure, RemoveRequest,
-        RemoveResponse, RemoveSuccess, SessionData,
+        DashboardQuery, GitHubAccessTokenResponse, OAuthCallbackQuery, RemoveFailure,
+        RemoveRequest, RemoveResponse, RemoveSuccess, SessionData,
     },
     utils,
 };
@@ -315,7 +315,11 @@ pub async fn remove_collaborators(
             continue;
         }
 
-        info!(repo = item.repo, username = item.username, "attempting collaborator deletion");
+        info!(
+            repo = item.repo,
+            username = item.username,
+            "attempting collaborator deletion"
+        );
         let status = match state
             .github
             .remove_collaborator(
@@ -366,8 +370,5 @@ pub async fn remove_collaborators(
         }
     }
 
-    Ok((
-        StatusCode::OK,
-        Json(RemoveResponse { success, failed }),
-    ))
+    Ok((StatusCode::OK, Json(RemoveResponse { success, failed })))
 }

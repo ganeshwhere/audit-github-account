@@ -4,10 +4,7 @@ use axum_extra::extract::{
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 
-use crate::{
-    error::AppError,
-    models::SessionData,
-};
+use crate::{error::AppError, models::SessionData};
 
 pub const SESSION_COOKIE: &str = "gh_session";
 pub const OAUTH_STATE_COOKIE: &str = "gh_oauth_state";
@@ -63,7 +60,8 @@ pub fn set_oauth_state(jar: PrivateCookieJar, state: &str, secure: bool) -> Priv
 }
 
 pub fn read_oauth_state(jar: &PrivateCookieJar) -> Option<String> {
-    jar.get(OAUTH_STATE_COOKIE).map(|cookie| cookie.value().to_owned())
+    jar.get(OAUTH_STATE_COOKIE)
+        .map(|cookie| cookie.value().to_owned())
 }
 
 pub fn clear_oauth_state(jar: PrivateCookieJar, secure: bool) -> PrivateCookieJar {

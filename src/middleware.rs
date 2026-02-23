@@ -6,10 +6,7 @@ use axum::{
 };
 use axum_extra::extract::PrivateCookieJar;
 
-use crate::{
-    AppState, auth,
-    models::SessionData,
-};
+use crate::{AppState, auth, models::SessionData};
 
 pub async fn require_auth(
     State(state): State<AppState>,
@@ -21,7 +18,11 @@ pub async fn require_auth(
 
     match auth::read_session(&jar) {
         Ok(Some(session)) => run_authenticated(next, request, session).await,
-        _ => unauthenticated_response(path.as_str(), jar, state.config.base_url.scheme() == "https"),
+        _ => unauthenticated_response(
+            path.as_str(),
+            jar,
+            state.config.base_url.scheme() == "https",
+        ),
     }
 }
 

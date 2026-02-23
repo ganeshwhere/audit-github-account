@@ -76,10 +76,7 @@ impl GitHubClient {
             }
 
             let next_link = utils::parse_next_link(
-                response
-                    .headers()
-                    .get("link")
-                    .and_then(|v| v.to_str().ok()),
+                response.headers().get("link").and_then(|v| v.to_str().ok()),
             );
 
             let page_repos = response.json::<Vec<Repository>>().await?;
@@ -114,7 +111,10 @@ impl GitHubClient {
                 .await?;
 
             if response.status() == StatusCode::FORBIDDEN {
-                warn!(owner, repo, "insufficient permissions while fetching collaborators");
+                warn!(
+                    owner,
+                    repo, "insufficient permissions while fetching collaborators"
+                );
                 return Ok(CollaboratorFetchOutcome::Forbidden);
             }
 
@@ -126,10 +126,7 @@ impl GitHubClient {
             }
 
             let next_link = utils::parse_next_link(
-                response
-                    .headers()
-                    .get("link")
-                    .and_then(|v| v.to_str().ok()),
+                response.headers().get("link").and_then(|v| v.to_str().ok()),
             );
 
             let page_collaborators = response.json::<Vec<Collaborator>>().await?;
@@ -163,7 +160,10 @@ impl GitHubClient {
             let viewer_login = viewer_login.clone();
 
             async move {
-                let permit = semaphore.acquire_owned().await.map_err(|_| AppError::Internal)?;
+                let permit = semaphore
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| AppError::Internal)?;
                 let owner = repo.owner.login.clone();
                 let repo_name = repo.name.clone();
 
@@ -225,7 +225,10 @@ impl GitHubClient {
             }
         }
 
-        info!(repo_count = output.len(), "fetched repositories with collaborators");
+        info!(
+            repo_count = output.len(),
+            "fetched repositories with collaborators"
+        );
         Ok(output)
     }
 
@@ -290,7 +293,8 @@ impl GitHubClient {
         repo: &str,
         username: &str,
     ) -> Result<StatusCode, AppError> {
-        let endpoint = format!("https://api.github.com/repos/{owner}/{repo}/collaborators/{username}");
+        let endpoint =
+            format!("https://api.github.com/repos/{owner}/{repo}/collaborators/{username}");
 
         let response = self
             .send_with_retry(|| self.authorized_request(self.http.delete(endpoint.clone()), token))
